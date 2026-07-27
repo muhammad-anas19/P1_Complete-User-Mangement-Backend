@@ -6,6 +6,7 @@ import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './modules/health/health.module';
 import { UsersModule } from './modules/users/users.module';
 import { RolesModule } from './modules/roles/roles.module';
+import { AuthModule } from './modules/auth/auth.module';
 
 @Module({
   imports: [
@@ -18,8 +19,7 @@ import { RolesModule } from './modules/roles/roles.module';
     HealthModule,
     UsersModule,
     RolesModule,
-    // modules/auth (login/logout/refresh, RefreshToken entity wiring) is
-    // added in Phase 3 — see docs/phases.md.
+    AuthModule,
   ],
 })
 export class AppModule {}

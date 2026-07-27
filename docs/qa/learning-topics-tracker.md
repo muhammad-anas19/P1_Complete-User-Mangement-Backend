@@ -56,6 +56,18 @@
 - [x] **`up()`/`down()` reversibility** — reviewed the real generated migration's `down()`: correctly drops FKs before tables, drops the enum type only after the table using it is gone — order matters, and now you've seen why.
 - [x] *(practiced)* **Soft delete via `@DeleteDateColumn`** — `deletedAt` on `users`, confirmed present in the real generated schema.
 
+## From Phase 3 — httpOnly Cookie Auth ([full doc](phase-3-cookie-auth-understanding-check.md))
+
+- [x] *(practiced)* **Argon2id parameters (memory/time/parallelism cost)** — real `PasswordService` with OWASP baseline values, verified a real hash/verify round-trip against this machine's native `argon2` binary before building anything on top of it.
+- [x] *(practiced)* **DI for testability** — `PasswordService`/`TokenService` injected into `AuthService`, not called statically — sets up Phase 7's unit tests to mock both without paying real Argon2id cost per test run.
+- [x] *(practiced)* **Timing-attack-aware login** — verified directly: wrong-password and unknown-email responses are identical in shape, message, *and* status; both run a real `verify()` call (dummy hash for the unknown-email case) rather than short-circuiting.
+- [x] **JWTs are signed, not encrypted** — decoded a real issued access token by eye; payload is plainly readable base64, confirming why a password hash (or anything secret) must never go in one.
+- [x] *(practiced)* **`@Res({ passthrough: true })` vs. bare `@Res()`** — used correctly on every auth endpoint; `return user` still gets sent automatically while cookies are set manually.
+- [x] *(practiced, corrected via a real bug)* **Cookie `Path` scoping** — the plan (`Path=/auth/refresh`) broke logout in practice, because `/auth/logout` doesn't share that path prefix — the refresh cookie was never sent there at all, so logout's DB revocation silently no-op'd. Found by testing the actual endpoint with curl (not by reading the code), fixed by broadening to `Path=/auth`. This is the single most valuable thing this phase taught: a design that sounds right in a doc can still be wrong until it's actually exercised end-to-end.
+- [x] *(practiced)* **Refresh rotation + reuse detection, for real** — not just designed, *observed*: rotated a token, replayed the old one, watched the whole family (including the still-fresh legitimate token) get revoked, confirmed directly in Postgres.
+- [x] *(practiced)* **`passport-jwt` custom cookie extractor + guard → `request.user` chain** — `/auth/me` correctly 200s with cookies, 401s without, via the real `JwtStrategy`/`JwtAuthGuard`.
+- [x] *(practiced)* **Logout ordering (DB revoke before cookie-clear)** — implemented in that order; also directly caused the Path bug above to surface as "logout looks like it worked (cookies cleared, `/auth/me` 401s) but the DB still shows the token live" — a good example of why "the client looks logged out" isn't proof the security-relevant action happened.
+
 ---
 
 ## Consolidated Reading List (dedup'd across phases)
@@ -69,17 +81,19 @@
 7. Kubernetes/orchestrator docs (even a general blog post is fine): **liveness vs. readiness probes**.
 8. TypeORM docs: **`@ManyToMany`/`@JoinTable`**, **`@DeleteDateColumn`** (soft delete), migration `up()`/`down()` authoring.
 9. A short read on **IDOR** (Insecure Direct Object Reference) as a named vulnerability class — ties directly to the UUID-vs-int reasoning.
+10. NestJS docs: **Passport integration**, custom Passport strategies, `@Res({ passthrough: true })`.
+11. MDN: cookie **`Path`** matching semantics specifically — the exact mechanism that caused the Phase 3 logout bug.
 
 ---
 
 ## Status Snapshot
 
-Last updated: after Phase 2 implementation (schema, migration, and seed all run and verified against the real local Postgres instance).
+Last updated: after Phase 3 implementation (login/refresh/logout/me all verified end-to-end against the real app + real Postgres, including a real bug found and fixed).
 
-- Concepts explained and understood: **29**
-- Concepts practiced hands-on in real code: **8** (TypeORM connection wiring, liveness/readiness health checks, many-to-many join table, refresh-token rotation schema, `migration:generate` diffing, migration `up()`/`down()` review, soft delete, repository pattern via `forFeature()`)
+- Concepts explained and understood: **38**
+- Concepts practiced hands-on in real code: **17** (TypeORM connection wiring, liveness/readiness health checks, many-to-many join table, refresh-token rotation schema, `migration:generate` diffing, migration `up()`/`down()` review, soft delete, repository pattern via `forFeature()`, Argon2id hashing, DI-for-testability in AuthService, timing-attack-safe login, `@Res({passthrough:true})`, cookie `Path` scoping — corrected via a real bug, refresh rotation + reuse detection observed live, passport-jwt cookie extraction, logout DB-then-cookie ordering)
 - Concepts explained but still needing hands-on practice: **3**
-- Next update due: after Phase 3 (httpOnly cookie auth) understanding-check.
+- Next update due: after Phase 4 (RBAC guards) understanding-check.
 
 ### Phase 1 Build Notes (things that came up during implementation, not just Q&A)
 
@@ -91,3 +105,12 @@ Last updated: after Phase 2 implementation (schema, migration, and seed all run 
 - **`Object` type not supported by Postgres** — TypeORM couldn't infer a column type for `string | null` union-typed fields (`avatarUrl`, `ipAddress`, `userAgent`) via `reflect-metadata`; fixed by adding an explicit `type: 'varchar'` on those columns. Worth remembering: any nullable/union-typed TS field needs an explicit `type` in `@Column()`, not just relying on inference.
 - **`uuid-ossp` extension** was already enabled in the fresh `p1_dashboard_dev` database (inherited from `template1`, likely from earlier setup on this machine for another project) — confirmed before running the migration rather than assuming it. Worth knowing that on a genuinely fresh Postgres install, this may need `CREATE EXTENSION "uuid-ossp"` explicitly (TypeORM's migration runner does attempt `CREATE EXTENSION IF NOT EXISTS "uuid-ossp"` automatically on connect, so this is normally handled — confirmed in the actual query log during `migration:run`).
 - **Idempotent seed script verified for real** — ran the seed twice; first run created 12 permissions + 3 roles, second run logged "updated role" with zero new rows, confirmed by querying `role_permissions` counts directly (Admin: 12, Manager: 5, Viewer: 3 — matches `PRD.md` Section 2 exactly).
+
+### Phase 3 Build Notes
+
+- **The cookie `Path` bug** (see the Phase 3 checklist item above) is the headline finding of this phase — a design that was reasoned through carefully in the understanding-check doc still had a real bug, only caught by actually exercising the endpoint with curl and checking the database afterward, not by re-reading the code. Kept as the strongest evidence yet for why this project tests against the real running app + real Postgres at the end of every phase instead of trusting review alone.
+- **`argon2` v0.45.1's TS types changed shape** from older versions this agent expected — the exported type is `HashOptions`, not `Options`. Caught immediately by `npm run build`, fixed by reading the package's actual `.d.cts` file rather than guessing.
+- **`ms` v2.1.3's types are stricter than expected** — its parse overload requires a template-literal `StringValue` type, not a plain `string`, so config values (typed as `string` in `Configuration`) needed an explicit `as ms.StringValue` cast at the two call sites.
+- **`isolatedModules` + `emitDecoratorMetadata` requires `import type`** for types used purely as type annotations in decorated method signatures (e.g. `@CurrentUser() currentUser: CurrentUserPayload`) — a value import of a type-only symbol fails the build under this project's `tsconfig.json` settings. Fixed by splitting into a separate `import type { ... }` line.
+- **26 npm audit findings, unresolved on purpose** — all trace back to `typeorm@0.3.31`'s transitive dev-tooling deps (`glob`/`minimatch`/`brace-expansion`, used for migration-file path globbing, never on a request-handling path). The suggested fix force-upgrades to `typeorm@1.1.0` — the same version deliberately avoided in Phase 1. Left as-is and disclosed, not silently ignored.
+- **A temporary test user** (`test.admin@example.com`, password `CorrectHorseBatteryStaple123`, role `Admin`) exists in `p1_dashboard_dev` — created by a throwaway script (deleted after use) purely to verify the login/refresh/logout flow end-to-end. Left in the database since it's harmless and useful for continued manual testing in Phase 4; delete it whenever it's no longer needed.

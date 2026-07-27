@@ -57,8 +57,8 @@ Exactly the `PaginatedResponse<T>` shape in `architecture.md` Section 5 — `dat
 | `HttpOnly` | true | true |
 | `Secure` | true (prod), false (local http dev — documented exception) | same |
 | `SameSite` | `Lax` | `Lax` |
-| `Path` | `/` | `/auth/refresh` (narrow scope — reduces exposure surface) |
-| `Max-Age` | ~15 min | ~7–30 days (confirm exact value in Phase 3 questions) |
+| `Path` | `/` | `/auth` (see `BE-DEC-004` — narrower than `/` but must cover every auth endpoint that reads it, not just `/auth/refresh`) |
+| `Max-Age` | 15 min (`JWT_ACCESS_EXPIRES_IN`) | 7 days (`JWT_REFRESH_EXPIRES_IN`) |
 
 ---
 
@@ -79,7 +79,7 @@ Same purpose as the frontend's log — non-trivial choices made without a formal
 | `BE-DEC-001` | Auth model | Role + permissions normalized tables instead of a hardcoded 3-value enum | Deliberately more than the PRD strictly requires, chosen for RBAC learning depth (see `qa/phase-0-...md` Q10) | *Confirmed by user* |
 | `BE-DEC-002` | ORM | TypeORM over Prisma | Closer to Nest's native DI/repository style; keeps migrations closer to raw SQL for learning purposes (see `qa/phase-1-...md` Q5) | *Confirmed by user* |
 | `BE-DEC-003` | Entity IDs | UUID primary keys instead of auto-increment integers | Prevents ID-enumeration (IDOR); full pros/cons in `qa/phase-2-...md` Q3 | *Confirmed by user* |
-| `BE-DEC-004` | Refresh cookie scope | `Path=/auth/refresh` instead of site-wide `/` | Defense-in-depth — narrows which requests carry the more sensitive long-lived token | *Pending review* |
+| `BE-DEC-004` | Refresh cookie scope | `Path=/auth` (revised from the originally planned `/auth/refresh`) | Originally scoped to `/auth/refresh` only for narrower exposure, but that silently excluded `/auth/logout` from ever receiving the cookie — logout's DB revocation step no-op'd because it never saw the token. Caught by testing the real endpoint, not just review. `/auth` is the smallest scope that covers every auth endpoint that needs it. See `qa/phase-3-...md` Q6 | *Confirmed — corrected after a real bug found during Phase 3 testing* |
 | `BE-DEC-005` | Refresh token hashing | SHA-256 (fast hash), not Argon2id | Refresh tokens are high-entropy random values, not guessable passwords — nothing to slow down brute-forcing of; Argon2id here would just waste CPU on every refresh. See `qa/phase-2-...md` Q4 | *Confirmed by user* |
 | `BE-DEC-006` | `refresh_tokens` rotation model | Insert a new row per refresh + mark old row `revoked_at`, never update a token value in place | Update-in-place destroys the history needed for reuse detection (Q4) | *Confirmed by user* |
 | `BE-DEC-007` | `role.permissions` loading | `eager: true` on the `Role.permissions` relation | RBAC checks almost always need a role's permissions loaded alongside it; revisit if this causes unwanted permission-loading on unrelated Role queries later | *Pending review* |

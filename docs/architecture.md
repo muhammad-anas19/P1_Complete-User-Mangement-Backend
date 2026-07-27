@@ -84,8 +84,8 @@ Two `httpOnly` cookies, set on the response, never touched by client JS:
 
 | Cookie | Contents | Lifetime | `Path` | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| `access_token` | Signed JWT — `{ sub, email, role, iat, exp }` | ~15 min | `/` | Stateless; verified by signature only, no DB hit on every request (see Q9 tradeoff in `qa/phase-0-...md`) |
-| `refresh_token` | Opaque random token (or signed JWT with a `jti`) | ~7–30 days | `/auth/refresh` | **Stateful** — a hashed copy is stored in the `refresh_tokens` table, enabling revocation and rotation-reuse detection |
+| `access_token` | Signed JWT — `{ sub, email, role, iat, exp }` | 15 min | `/` | Stateless; verified by signature only, no DB hit on every request (see Q9 tradeoff in `qa/phase-0-...md`) |
+| `refresh_token` | Opaque random token (`crypto.randomBytes`), SHA-256 hash stored, never the raw value | 7 days | `/auth` | **Stateful** — a hashed copy is stored in the `refresh_tokens` table, enabling revocation and rotation-reuse detection. `Path=/auth`, not the narrower `/auth/refresh` originally planned — see `BE-DEC-004` in `design.md` |
 
 Both cookies: `HttpOnly`, `Secure` (production), `SameSite=Lax`.
 
