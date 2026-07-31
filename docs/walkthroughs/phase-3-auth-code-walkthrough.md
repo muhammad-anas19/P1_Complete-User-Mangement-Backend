@@ -102,6 +102,36 @@ export class ResponseEnvelopeInterceptor implements NestInterceptor {
 - **`.pipe(map(...))`**: RxJS's way of saying "when the handler's result arrives, transform it like this before it goes further." This is where the actual envelope wrapping happens.
 - **`instanceToPlain(data)`**: from `class-transformer`. Walks the returned object (e.g. a `User` entity instance) and strips any field marked `@Exclude()` — this is the *one place* `passwordHash` actually gets removed. Calling it explicitly here (rather than relying on a second global `ClassSerializerInterceptor` and hoping interceptor ordering works out) is a deliberate simplicity choice — see the reasoning in `qa/phase-3-...md` "Implementation Notes."
 
+**This interceptor genuinely has a "before" phase and an "after" phase — not just the latter.** Everything before the `next.handle()` call (reading `request.path`, deciding whether to skip) runs *before* the controller, before Pipes, before anything downstream. The `.pipe(map(...))` half runs *after* the handler returns. Concretely, for `GET /auth/me`:
+
+```
+request arrives
+  → (this interceptor, "before" phase): check path — not /health, proceed
+  → Pipes run (none needed here, no body to validate)
+  → JwtAuthGuard already ran earlier (guards run before interceptors)
+  → AuthController.me() executes, returns a User entity instance
+  → (this interceptor, "after" phase): instanceToPlain() strips passwordHash,
+    then wraps: { success: true, data: {...}, timestamp: "..." }
+  → response sent to browser
+```
+
+Before wrapping, the controller's raw return value looks like a full `User` instance (including the excluded field, still present on the object in memory):
+```json
+{ "id": "...", "name": "Anas", "email": "...", "passwordHash": "$argon2id$..." }
+```
+After `instanceToPlain()` + the envelope wrap, the client actually receives:
+```json
+{ "success": true, "data": { "id": "...", "name": "Anas", "email": "..." }, "timestamp": "2026-07-28T10:15:30.000Z" }
+```
+
+**One precise correction worth internalizing:** the full request lifecycle (per `docs/architecture.md` Section 2) is `Middleware → Guards → Interceptors (pre) → Pipes → Handler → Interceptors (post) → Filters` — **Pipes sit between the interceptor's "before" phase and the handler**, not after the handler. It's easy to mentally drop Pipes out of the diagram since this particular route has no body to validate, but the global `ValidationPipe` (Phase 1) genuinely runs in that slot for any route with a `@Body()` DTO, like `POST /auth/login`.
+
+**Also worth being precise about `@Injectable()` here — it's not currently doing what it usually implies.** Look at how this class is actually registered, in `main.ts`:
+```ts
+app.useGlobalInterceptors(new ResponseEnvelopeInterceptor());
+```
+That's a manual `new` — Nest's DI container never constructs this instance in our app; nothing is "injected" into it via DI here at all. `@Injectable()` is present as a defensive convention (and would be *required* the moment this class ever gains a constructor dependency — e.g. a `ConfigService` to make the `/health` skip-list configurable instead of hardcoded — at which point manual `new` would break, since nothing would supply that dependency, and it'd need to move to a module's `providers` array registered via the `APP_INTERCEPTOR` token instead).
+
 ---
 
 ## 4. `src/common/filters/all-exceptions.filter.ts`
@@ -133,9 +163,23 @@ export class AllExceptionsFilter implements ExceptionFilter {
 ```
 
 - **`@Catch()` with no argument**: catches *every* thrown exception, of any type — a more specific filter could say `@Catch(HttpException)` to only catch that one kind. We want the safety net to be total, since an *uncaught* error would otherwise let Express's default handler leak a raw stack trace to the client.
-- **`ArgumentsHost`**: same idea as `ExecutionContext` (a transport-agnostic wrapper); `.switchToHttp()` narrows it down to "give me the actual Express request/response objects."
-- **Why the health-route branch reconstructs the response manually instead of calling `next()`**: filters don't chain the way interceptors do — this is the outermost, last-resort handler. Forwarding `exception.getResponse()` and `exception.getStatus()` as-is preserves Terminus's own well-formed health-check error shape untouched.
+- **`ArgumentsHost`**: the *base* interface — `ExecutionContext` (used in Guards/Interceptors, see file 3 and file 6) actually **extends** `ArgumentsHost` with two extra methods, `getClass()`/`getHandler()`, used to read decorator metadata off the route (exactly what `RolesGuard` will use in Phase 4 to read `@Roles('Admin')`). Filters only get the plainer `ArgumentsHost` — by the time you're handling an exception, you don't typically need "which decorators does this route have," just the request/response. `.switchToHttp()` narrows either one down to "give me the actual Express request/response objects."
+- **Why the health-route branch reconstructs the response manually instead of calling `next()`**: filters don't chain the way interceptors do — this is the outermost, last-resort handler. Forwarding `exception.getResponse()` and `exception.getStatus()` as-is preserves Terminus's own well-formed health-check error shape untouched (Terminus's health-check failures are *already* thrown as an `HttpException` carrying that exact `{status, info, error, details}` body — this filter isn't reconstructing that shape, just re-emitting the exception's own `.getResponse()` untouched).
 - **`exception instanceof HttpException`**: distinguishes "a deliberate error the app threw on purpose" (e.g. `throw new UnauthorizedException(...)` in `AuthService`) from "something genuinely broke" (a real bug, a DB connection drop) — only the latter gets logged as a server-side error and shown a generic `"Internal server error"` message, per `design.md` Section 6's "5xx errors never leak internals" rule.
+
+**This filter isn't scoped to "the Service layer failed" — it catches an exception thrown *anywhere*.** A `ValidationPipe` rejecting a malformed DTO, a `Guard` throwing `403`, even a bug inside `ResponseEnvelopeInterceptor`'s own `map()` callback — all of these land in this exact same `catch()` method. `@Catch()` with no argument means "anything, anywhere in the request pipeline, that wasn't handled," not just service-layer business errors.
+
+**The split between this filter and `ResponseEnvelopeInterceptor` isn't an if/else anywhere in your own code — it's Nest watching the outcome of one RxJS `Observable`.** The whole request is processed as a single stream. If it completes normally, Nest's internals route the result through registered interceptors (the `map()` transform in file 3 runs). If that stream **errors out** at any point — a throw anywhere upstream, including inside an interceptor — Nest's internals instead route it to registered exception filters (this class). Neither class calls the other or checks "did this succeed"; they're two independent handlers the framework wires to two different possible outcomes of the same execution.
+
+Concretely, for `POST /auth/login` with a wrong password:
+```
+AuthController.login() → AuthService.login() → throws UnauthorizedException('Invalid email or password')
+  → the Observable for this request errors out
+  → AllExceptionsFilter.catch() runs (ResponseEnvelopeInterceptor's map() never runs — there's no success value to transform)
+  → status = 401 (from exception.getStatus())
+  → message = 'Invalid email or password' (from exception.getResponse().message)
+  → client receives: { "success": false, "message": "Invalid email or password", "timestamp": "..." }
+```
 
 ---
 

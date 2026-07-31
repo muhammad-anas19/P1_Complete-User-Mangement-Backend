@@ -68,6 +68,18 @@
 - [x] *(practiced)* **`passport-jwt` custom cookie extractor + guard → `request.user` chain** — `/auth/me` correctly 200s with cookies, 401s without, via the real `JwtStrategy`/`JwtAuthGuard`.
 - [x] *(practiced)* **Logout ordering (DB revoke before cookie-clear)** — implemented in that order; also directly caused the Path bug above to surface as "logout looks like it worked (cookies cleared, `/auth/me` 401s) but the DB still shows the token live" — a good example of why "the client looks logged out" isn't proof the security-relevant action happened.
 
+## From Phase 4 — RBAC Guards & User Management ([full doc](phase-4-rbac-users-understanding-check.md))
+
+- [x] *(practiced)* **`SetMetadata` + `Reflector.getAllAndOverride`** — built `@RequirePermissions()` from scratch and read it back in a real guard; confirmed the method-level-overrides-class-level behavior conceptually (not separately re-tested, since this project only sets it at method level).
+- [x] *(practiced)* **Authentication-before-authorization guard ordering** — `@UseGuards(JwtAuthGuard, PermissionsGuard)`; verified a request with no cookie gets `401` from the first guard, never reaching the second.
+- [x] *(practiced)* **Permission resolution from role name, fresh per request** — chose this over JWT-embedded permissions specifically to exercise the Phase 2 schema; verified live: Manager blocked from `users:update`/`users:delete`, allowed on `users:read`, matching the seeded permission bundle exactly.
+- [x] *(practiced)* **Fail-closed guard design** — implemented (throws if no `@RequirePermissions()` found); not separately exercised live since every shipped route has the decorator — this is exactly the branch flagged for a dedicated Phase 7 unit test, since it's the one most likely to silently regress.
+- [x] *(practiced)* **TOCTOU / DB-constraint-as-real-enforcement, applied a second time** — same lesson as Phase 2 Q5, now actually hit: duplicate-email `POST /users` correctly returns a clean `409` translated from Postgres's own `23505` unique-violation error, not a pre-check race.
+- [x] *(practiced)* **Soft delete + session revocation together, for real** — `DELETE /users/:id` confirmed via direct Postgres query to set `deleted_at` (never a hard delete) and to revoke that user's live refresh tokens in the same operation.
+- [x] *(practiced)* **TypeORM `QueryBuilder`** (`andWhere`, `leftJoinAndSelect`, parameterized values, `getManyAndCount`) — first use beyond simple `findOneBy`/`find`; verified pagination shape (`total`, `totalPages`, `hasNextPage`) matches the frontend's real `PaginatedResponse<T>` type field-for-field.
+- [x] **Avoiding a circular module dependency by re-registering an entity** — `RefreshToken` registered in both `AuthModule` and `UsersModule` rather than having `UsersModule` import `AuthModule` (which already imports `UsersModule`) — a concrete instance of the abstract Phase 1 Q1 module-boundary concept.
+- [ ] **Unit-testing a Guard with a fake `Reflector`/`ExecutionContext`** — reasoned through in the qa doc (Q9), not yet written. *(practice this hands-on in Phase 7)*
+
 ---
 
 ## Consolidated Reading List (dedup'd across phases)
@@ -83,17 +95,19 @@
 9. A short read on **IDOR** (Insecure Direct Object Reference) as a named vulnerability class — ties directly to the UUID-vs-int reasoning.
 10. NestJS docs: **Passport integration**, custom Passport strategies, `@Res({ passthrough: true })`.
 11. MDN: cookie **`Path`** matching semantics specifically — the exact mechanism that caused the Phase 3 logout bug.
+12. NestJS docs: **custom decorators with `SetMetadata`**, `Reflector`, and **`CanActivate`** — the full mechanics behind `@RequirePermissions()`/`PermissionsGuard`.
+13. TypeORM docs: **`QueryBuilder`** (`andWhere`, joins, parameterized values) vs. the simpler `Repository` methods used through Phase 3.
 
 ---
 
 ## Status Snapshot
 
-Last updated: after Phase 3 implementation (login/refresh/logout/me all verified end-to-end against the real app + real Postgres, including a real bug found and fixed).
+Last updated: after Phase 4 implementation (RBAC guards + full Users CRUD, verified end-to-end for all three roles against the real app + real Postgres).
 
-- Concepts explained and understood: **38**
-- Concepts practiced hands-on in real code: **17** (TypeORM connection wiring, liveness/readiness health checks, many-to-many join table, refresh-token rotation schema, `migration:generate` diffing, migration `up()`/`down()` review, soft delete, repository pattern via `forFeature()`, Argon2id hashing, DI-for-testability in AuthService, timing-attack-safe login, `@Res({passthrough:true})`, cookie `Path` scoping — corrected via a real bug, refresh rotation + reuse detection observed live, passport-jwt cookie extraction, logout DB-then-cookie ordering)
-- Concepts explained but still needing hands-on practice: **3**
-- Next update due: after Phase 4 (RBAC guards) understanding-check.
+- Concepts explained and understood: **47**
+- Concepts practiced hands-on in real code: **25** (TypeORM connection wiring, liveness/readiness health checks, many-to-many join table, refresh-token rotation schema, `migration:generate` diffing, migration `up()`/`down()` review, soft delete, repository pattern via `forFeature()`, Argon2id hashing, DI-for-testability in AuthService, timing-attack-safe login, `@Res({passthrough:true})`, cookie `Path` scoping — corrected via a real bug, refresh rotation + reuse detection observed live, passport-jwt cookie extraction, logout DB-then-cookie ordering, `SetMetadata`/`Reflector`, guard ordering, DB-resolved permission checks, TOCTOU-safe unique-email handling, soft-delete + session revocation together, `QueryBuilder`, avoiding a circular module dependency)
+- Concepts explained but still needing hands-on practice: **4**
+- Next update due: after Phase 5 (hardening: refresh rotation edge cases, CSRF, rate limiting) understanding-check.
 
 ### Phase 1 Build Notes (things that came up during implementation, not just Q&A)
 
@@ -114,3 +128,10 @@ Last updated: after Phase 3 implementation (login/refresh/logout/me all verified
 - **`isolatedModules` + `emitDecoratorMetadata` requires `import type`** for types used purely as type annotations in decorated method signatures (e.g. `@CurrentUser() currentUser: CurrentUserPayload`) — a value import of a type-only symbol fails the build under this project's `tsconfig.json` settings. Fixed by splitting into a separate `import type { ... }` line.
 - **26 npm audit findings, unresolved on purpose** — all trace back to `typeorm@0.3.31`'s transitive dev-tooling deps (`glob`/`minimatch`/`brace-expansion`, used for migration-file path globbing, never on a request-handling path). The suggested fix force-upgrades to `typeorm@1.1.0` — the same version deliberately avoided in Phase 1. Left as-is and disclosed, not silently ignored.
 - **A temporary test user** (`test.admin@example.com`, password `CorrectHorseBatteryStaple123`, role `Admin`) exists in `p1_dashboard_dev` — created by a throwaway script (deleted after use) purely to verify the login/refresh/logout flow end-to-end. Left in the database since it's harmless and useful for continued manual testing in Phase 4; delete it whenever it's no longer needed.
+
+### Phase 4 Build Notes
+
+- **Two more test users** (`test.manager@example.com`, `test.viewer@example.com`, same password as the Phase 3 admin one) created via another throwaway script (deleted after use) specifically to verify the permission matrix across all three roles, not just Admin. All three left in the database, harmless, useful for Phase 5+ manual testing.
+- **The circular-module-dependency near-miss** (see the checklist item above) — worth calling out as a build note too, not just a concept: this was caught by *reasoning about the import graph before writing the code* (during the walkthrough-writing pass), not by hitting an actual `forwardRef` runtime error. Good example of the Phase 1 Q1 concept paying off — recognizing the shape of the problem in advance instead of debugging it after Nest refuses to boot.
+- **`ParseUUIDPipe` and `@IsUUID()` are deliberately redundant with each other** — the DTO's `@IsUUID()` validates `roleId` in the request *body*; `ParseUUIDPipe` validates the `:id` route *parameter*. Both were needed because they validate two different pieces of the request, not because one was a mistake.
+- **Verified the full permission matrix live**, not just the happy path: all three roles can `GET /users`; unauthenticated requests get `401`; Manager and Viewer both correctly get `403` on create/update/delete; duplicate email returns a clean `409`; invalid `roleId` returns `400`; deleting a user is confirmed as a genuine soft delete via direct Postgres query, not just via the API's own response.
