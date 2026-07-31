@@ -80,6 +80,10 @@
 - [x] **Avoiding a circular module dependency by re-registering an entity** — `RefreshToken` registered in both `AuthModule` and `UsersModule` rather than having `UsersModule` import `AuthModule` (which already imports `UsersModule`) — a concrete instance of the abstract Phase 1 Q1 module-boundary concept.
 - [ ] **Unit-testing a Guard with a fake `Reflector`/`ExecutionContext`** — reasoned through in the qa doc (Q9), not yet written. *(practice this hands-on in Phase 7)*
 
+## Recurring Item — Flagged for Re-Review
+
+- [x] *(re-corrected, with direct DB verification this time)* **`@ManyToMany` + `@JoinTable` is not an array column** — this exact misconception (Phase 2 Q1/Q2: "isn't it just a permissions array on the role?") resurfaced while reading `role.entity.ts` directly, after the concept had already been explained once in the Phase 2 qa doc. Re-corrected with `\d roles` (confirms zero `permissions` column exists) and `\d role_permissions` (confirms the real two-column junction table) run live against Postgres — see the new [phase-2-schema-migrations-code-walkthrough.md](phase-2-schema-migrations-code-walkthrough.md), written specifically to close this gap with the real code and real schema side by side. **Worth flagging to future-you:** a concept explained once in a qa doc isn't the same as it being fully internalized — if this resurfaces a third time, that's a signal to slow down and re-derive it from scratch rather than re-reading the explanation again.
+
 ---
 
 ## Consolidated Reading List (dedup'd across phases)
