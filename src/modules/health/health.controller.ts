@@ -1,10 +1,17 @@
 import { Controller, Get } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
+import { ApiTags } from '@nestjs/swagger';
 import {
   HealthCheck,
   HealthCheckService,
   TypeOrmHealthIndicator,
 } from '@nestjs/terminus';
 
+// Exempt from the global rate limit — orchestrator polling shouldn't be
+// able to trip a limit meant for user/API traffic. See
+// docs/qa/phase-5-hardening-understanding-check.md A5.
+@ApiTags('health')
+@SkipThrottle()
 @Controller('health')
 export class HealthController {
   constructor(

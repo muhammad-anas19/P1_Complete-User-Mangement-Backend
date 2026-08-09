@@ -5,16 +5,21 @@ import { PassportModule } from '@nestjs/passport';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Configuration } from '../../config/configuration';
 import { UsersModule } from '../users/users.module';
+import { RolesModule } from '../roles/roles.module';
+import { UserTokensModule } from '../user-tokens/user-tokens.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { PasswordService } from './password.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { TokenService } from './token.service';
+import { CsrfGuard } from '../../common/guards/csrf.guard';
 
 @Module({
   imports: [
     UsersModule, // for the User repository, via UsersModule's exported TypeOrmModule
+    RolesModule, // for the Role repository (signup's default-role lookup)
+    UserTokensModule, // for OTP/invite/reset token issuing & consumption
     TypeOrmModule.forFeature([RefreshToken]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
@@ -29,6 +34,6 @@ import { TokenService } from './token.service';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, PasswordService, TokenService, JwtStrategy],
+  providers: [AuthService, PasswordService, TokenService, JwtStrategy, CsrfGuard],
 })
 export class AuthModule {}

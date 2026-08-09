@@ -30,3 +30,7 @@ npm-debug.log*
 # tmp
 tmp/
 temp/
+
+# local disk-based uploads (Phase 6 note: swap for object storage in
+# production — see src/common/utils/upload.util.ts)
+/uploads/

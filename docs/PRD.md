@@ -21,11 +21,19 @@ The frontend was built first and defines a **fixed contract** this backend must 
 ### 1.3 Explicit Deviation From the Frontend Mock (Deliberate, Not a Bug)
 The frontend's current `lib/auth.ts` stores tokens in `localStorage` and expects `POST /auth/login` to return an `accessToken`/`refreshToken` in the response body. **This backend deliberately does not do that.** Tokens live only in `httpOnly`, `Secure`, `SameSite=Lax` cookies; the response body from `/auth/login` contains only the `User` object (still wrapped in the standard envelope). This is a known, intentional divergence — the frontend's `lib/auth.ts` and `fetchClient.ts` will need a follow-up rewrite (out of scope for *this* backend-only build) to stop reading tokens from the body and instead rely on `credentials: 'include'` for cookie-based requests.
 
-### 1.4 Out of Scope (This Build)
-- **Public self-registration.** The frontend has a `/signup` page, but per the frontend's own PRD, users are provisioned exclusively via an internal `Admin → Users` invite flow. This backend does not implement an open `POST /auth/register`.
-- **2FA / OTP verification.** The frontend has a `/verify-otp` page, but 2FA is explicitly deferred (per frontend PRD, Section 6). This backend does not implement OTP generation/verification. `/verify-otp` and `/accept-invite`'s OTP step remain frontend-only mock UI until a dedicated future phase.
-- **Products and Orders business logic depth.** This build implements Users + Auth + RBAC fully (the actual learning subject); Products/Orders are scaffolded with the same CRUD/pagination/RBAC pattern once Users is solid, as a repetition exercise, not a source of new concepts.
-- **Payment processing, shopper-facing storefronts** — same as frontend scope.
+### 1.4 Scope Amendment (Phase 8) — Superseding the Original Deferral Below
+
+The paragraph immediately below this one was the *original* scope decision (Phases 0–5) and is kept, struck through in spirit but not in text, as an honest record of the decision changing rather than silently rewriting history. **As of Phase 8, self-registration and email-verification-on-activation ARE implemented** (`POST /auth/signup`, `POST /auth/verify-otp`), per an explicit direction change. One clarification worth being precise about, because it resolves what looked like a contradiction: reading the actual frontend code showed `verify-otp` is reached only from `signup` and `accept-invite` — **never from normal login** — meaning this is **email verification on account activation**, not recurring multi-factor authentication on every sign-in. That distinction is what makes implementing it *not* actually conflict with "2FA is deferred" — true MFA (a second factor checked on every login) is still not built; a one-time activation check is.
+
+Self-registered accounts default to the **Viewer** role (least privilege) — self-registration proves nothing about what access someone should have, unlike Admin-provisioned accounts where a human explicitly chooses the role.
+
+### 1.4 (Original) Out of Scope — Phases 0–5
+
+- **Public self-registration.** ~~The frontend has a `/signup` page, but per the frontend's own PRD, users are provisioned exclusively via an internal `Admin → Users` invite flow. This backend does not implement an open `POST /auth/register`.~~ **Superseded — see amendment above.**
+- **2FA / OTP verification.** ~~The frontend has a `/verify-otp` page, but 2FA is explicitly deferred (per frontend PRD, Section 6). This backend does not implement OTP generation/verification.~~ **Partially superseded — email-verification-on-activation is implemented; recurring MFA on every login is still not built. See amendment above.**
+- **Products and Orders business logic depth.** ~~This build implements Users + Auth + RBAC fully (the actual learning subject); Products/Orders are scaffolded with the same CRUD/pagination/RBAC pattern once Users is solid, as a repetition exercise, not a source of new concepts.~~ **Superseded — Products and Orders are fully implemented as of Phase 6–7** (see `qa/phase-6-7-products-orders-understanding-check.md`), with the same disclosed simplifications noted there (no `Category` entity, no order line-items).
+- **Payment processing, shopper-facing storefronts** — still out of scope, unchanged.
+- **Real email delivery.** Still mocked (`Logger`-logged, not sent) for invites, verification codes, and reset links — a deliberate, disclosed simplification, not an oversight. See `docs/phases.md` Phase 8.
 
 ---
 

@@ -58,6 +58,13 @@ export class TokenService {
     return randomBytes(64).toString('hex');
   }
 
+  // No hashing, no DB storage — this value's only job is to be readable by
+  // same-origin JS and compared against what comes back in a header. See
+  // docs/qa/phase-5-hardening-understanding-check.md B1/B2.
+  generateCsrfToken(): string {
+    return randomBytes(32).toString('hex');
+  }
+
   async issueRefreshToken(
     userId: string,
     meta: RequestMeta,
@@ -131,5 +138,15 @@ export class TokenService {
   async revoke(rawToken: string): Promise<void> {
     const tokenHash = this.hashToken(rawToken);
     await this.refreshTokenRepo.update({ tokenHash }, { revokedAt: new Date() });
+  }
+
+  // Used after a password reset — a reset proves the old password may have
+  // been compromised, so every existing session (every device) should be
+  // forced to re-authenticate, not just the one that requested the reset.
+  async revokeAllForUser(userId: string): Promise<void> {
+    await this.refreshTokenRepo.update(
+      { userId, revokedAt: IsNull() },
+      { revokedAt: new Date() },
+    );
   }
 }
